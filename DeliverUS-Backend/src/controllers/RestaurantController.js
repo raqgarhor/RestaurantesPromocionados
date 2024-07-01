@@ -1,5 +1,10 @@
-import { Restaurant, Product, RestaurantCategory, ProductCategory } from '../models/models.js'
+import { Restaurant, Product, RestaurantCategory, ProductCategory, sequelizeSession } from '../models/models.js'
 
+/*
+ADEMÁS, LOS RESTAURANTES PROMOCIONADOS APARECERÁN SIEMPRE AL PRINCIPIO DE LOS LISTADOS DE RESTAURANTES QUE SE LE PRESENTAN
+TANTO A LOS DUEÑOS COMO A LOS CLIENTES.
+*/
+// SOLUCION
 const index = async function (req, res) {
   try {
     const restaurants = await Restaurant.findAll(
@@ -10,7 +15,7 @@ const index = async function (req, res) {
         model: RestaurantCategory,
         as: 'restaurantCategory'
       },
-        order: [[{ model: RestaurantCategory, as: 'restaurantCategory' }, 'name', 'ASC']]
+        order: [['promoted', 'DESC'], [{ model: RestaurantCategory, as: 'restaurantCategory' }, 'name', 'ASC']]
       }
     )
     res.json(restaurants)
@@ -19,12 +24,14 @@ const index = async function (req, res) {
   }
 }
 
+// SOLUCION
 const indexOwner = async function (req, res) {
   try {
     const restaurants = await Restaurant.findAll(
       {
         attributes: { exclude: ['userId'] },
         where: { userId: req.user.id },
+        order: [['promoted', 'DESC']],
         include: [{
           model: RestaurantCategory,
           as: 'restaurantCategory'
@@ -95,12 +102,48 @@ const destroy = async function (req, res) {
   }
 }
 
+/*
+SI EL PROPIETARIO PULSA EL BOTÓN PARA PROMOCIONAR UN NUEVO RESTAURANTE Y YA EXISTÍAN OTROS RESTAURANTES PROMOCIONADOS DEL
+MISMO DUEÑO, SE PROCEDERÁ A PROMOCIONAR EL RESTAURANTE INDICADO Y SE MARCARÁ COMO "NO PROMOCIONADO" EL RESTAURANTE QUE LO
+FUESE ANTERIORMENTE.
+*/
+// SOLUCION
+const promote = async function (req, res) {
+  const t = await sequelizeSession.transaction()
+  try {
+    // BUSCAMOS UNO YA PROMOCIONADO
+    const existingPromotedRestaurant = await Restaurant.findOne({ where: { userId: req.user.id, promoted: true } })
+    // SI EXISTE
+    if (existingPromotedRestaurant) {
+      // LO DESPROMOCIONAMOS
+      await Restaurant.update(
+        { promoted: false },
+        { where: { id: existingPromotedRestaurant.id } },
+        { transaction: t }
+      )
+    }
+    // PROMOCIONAMOS EL RESTAURANTE QUE QUEREMOS
+    await Restaurant.update(
+      { promoted: true },
+      { where: { id: req.params.restaurantId } },
+      { transaction: t }
+    )
+    await t.commit()
+    const updatedRestaurant = await Restaurant.findByPk(req.params.restaurantId)
+    res.json(updatedRestaurant)
+  } catch (err) {
+    await t.rollback()
+    res.status(500).send(err)
+  }
+}
+
 const RestaurantController = {
   index,
   indexOwner,
   create,
   show,
   update,
-  destroy
+  destroy,
+  promote
 }
 export default RestaurantController
